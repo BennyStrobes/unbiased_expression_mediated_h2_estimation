@@ -10,6 +10,9 @@ simulation_results_dir="$1"
 visualize_simulation_dir="$2"
 
 
+
+expression_data_sample_size="200"
+sh run_one_instance_of_expression_mediated_h2_simulation.sh $simulation_results_dir $expression_data_sample_size
 if false; then
 expression_data_sample_size="200"
 sbatch run_one_instance_of_expression_mediated_h2_simulation.sh $simulation_results_dir $expression_data_sample_size

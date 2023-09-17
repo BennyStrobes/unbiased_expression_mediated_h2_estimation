@@ -68,9 +68,8 @@ ldsc_viz_dir=$output_root"ldsc_viz/"
 ######################
 
 # SIMULATION
-if false; then
 sh expression_mediated_h2_simulation_driver_key.sh $simulation_results_dir $visualize_simulation_dir
-fi
+
 
 
 if false; then
@@ -168,9 +167,9 @@ source ~/.bash_profile
 module load R/3.5.1
 fi
 
-
+if false; then
 Rscript visualize_ldsc_results.R $ldsc_results_dir $ldsc_viz_dir
-
+fi
 
 
 

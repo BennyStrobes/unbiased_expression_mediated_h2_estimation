@@ -7,6 +7,7 @@ import pdb
 import sklearn.linear_model
 import statsmodels.api as sm
 import scipy.stats
+import pickle
 
 def ld_score_regression_with_no_ld(gwas_chi_squared_statistics, num_snps, gwas_sample_size):
 	h2 = np.mean((gwas_chi_squared_statistics - 1.0))*num_snps/gwas_sample_size
@@ -112,7 +113,7 @@ def simulate_gwas_data_with_genotype_and_expression_effects_v3(N_expr_samples, N
 	for gene_iter in range(N_no_gene_blocks):
 		# Simulate gene expression
 		gene_sim_info = run_simulation_in_single_gene_block(N_expr_samples, N_gwas_samples, N_var_per_gene_block, h2_expr, num_causal_eqtl_var_per_block)
-		gene_sim_info_arr.append(([np.nan], N_var_per_gene_block, np.nan, np.nan))
+		gene_sim_info_arr.append(([np.nan], N_var_per_gene_block, gene_sim_info[2], np.nan))
 
 
 		# Update mean of gwas
@@ -214,77 +215,128 @@ def h2_estimation_using_standard_approach_with_known_true_eqtl_effects(gene_sim_
 	return est_h2_g, est_h2_e
 
 def compute_ld_scores_for_genotype_and_expression_with_no_ld_and_point_estimate_eqtl_effects(gene_sim_info_arr):
-    genotype_ld_scores = []
-    expr_ld_scores = []
-    n_genes = len(gene_sim_info_arr)
-    n_standardized_genes = 0
-    for gene_sim_info in gene_sim_info_arr:
-        if np.isnan(gene_sim_info[0][0]):
-            nvar = gene_sim_info[1]
-            genotype_ld_scores.append(np.ones(nvar))
-            expr_ld_scores.append(np.zeros(nvar))
-        else:
-            true_eqtl_effects = gene_sim_info[1]
-            eqtl_geno = gene_sim_info[2]
-            eqtl_expr = gene_sim_info[3]
+	genotype_ld_scores = []
+	expr_ld_scores = []
+	n_genes = len(gene_sim_info_arr)
+	n_standardized_genes = 0
+	for gene_sim_info in gene_sim_info_arr:
+		if np.isnan(gene_sim_info[0][0]):
+			nvar = gene_sim_info[1]
+			genotype_ld_scores.append(np.ones(nvar))
+			expr_ld_scores.append(np.zeros(nvar))
+		else:
+			true_eqtl_effects = gene_sim_info[1]
+			eqtl_geno = gene_sim_info[2]
+			eqtl_expr = gene_sim_info[3]
 
-            # Ridge regression
-            clf = sklearn.linear_model.RidgeCV(alphas=[1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6]).fit(eqtl_geno, eqtl_expr)
-            clf = sklearn.linear_model.LassoCV(cv=5, random_state=0).fit(eqtl_geno, eqtl_expr)
-            eqtl_effects = clf.coef_
+			# Ridge regression
+			clf = sklearn.linear_model.RidgeCV(alphas=[1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6]).fit(eqtl_geno, eqtl_expr)
+			clf = sklearn.linear_model.LassoCV(cv=5, random_state=0).fit(eqtl_geno, eqtl_expr)
+			eqtl_effects = clf.coef_
 
-            eqtl_effects_var = np.dot(np.dot(eqtl_effects, np.eye(len(eqtl_effects))), eqtl_effects)
-            if eqtl_effects_var > 0.0:
-                standardized_eqtl_effects = eqtl_effects/np.sqrt(eqtl_effects_var)
-                n_standardized_genes = n_standardized_genes + 1
-            else:
-                standardized_eqtl_effects = eqtl_effects
+			eqtl_effects_var = np.dot(np.dot(eqtl_effects, np.eye(len(eqtl_effects))), eqtl_effects)
+			if eqtl_effects_var > 0.0:
+				standardized_eqtl_effects = eqtl_effects/np.sqrt(eqtl_effects_var)
+				n_standardized_genes = n_standardized_genes + 1
+			else:
+				standardized_eqtl_effects = eqtl_effects
 
-            genotype_ld_scores.append(np.ones(len(standardized_eqtl_effects)))
-            expr_ld_scores.append(np.square(standardized_eqtl_effects))
-    return np.hstack(genotype_ld_scores), np.hstack(expr_ld_scores), n_standardized_genes
+			genotype_ld_scores.append(np.ones(len(standardized_eqtl_effects)))
+			expr_ld_scores.append(np.square(standardized_eqtl_effects))
+	return np.hstack(genotype_ld_scores), np.hstack(expr_ld_scores), n_standardized_genes
+
+
+def compute_ld_scores_for_genotype_and_expression_with_ld_and_distribution_estimate_eqtl_effects(gene_sim_info_arr):
+	genotype_ld_scores = []
+	expr_ld_scores = []
+	n_genes = len(gene_sim_info_arr)
+	n_standardized_genes = 0
+	for gene_sim_info in gene_sim_info_arr:
+		if np.isnan(gene_sim_info[0][0]):
+			nvar = gene_sim_info[1]
+			r_squared = np.square(np.corrcoef(np.transpose(gene_sim_info[2])))
+			adj_r_squared = r_squared - ((1-r_squared)/gene_sim_info[2].shape[0])
+			ld_scores = np.sum(adj_r_squared,axis=1)
+			genotype_ld_scores.append(ld_scores)
+			expr_ld_scores.append(np.zeros(nvar))
+		else:
+			true_eqtl_effects = gene_sim_info[1]
+			eqtl_geno = gene_sim_info[2]
+			eqtl_expr = gene_sim_info[3]
+			r_squared = np.square(np.corrcoef(np.transpose(gene_sim_info[2])))
+			adj_r_squared = r_squared - ((1-r_squared)/gene_sim_info[2].shape[0])
+			ld_scores = np.sum(adj_r_squared,axis=1)
+			genotype_ld_scores.append(ld_scores)
+			n_samples = len(eqtl_expr)
+			marginal_eqtl_coefs = []
+			for geno_iter in range(eqtl_geno.shape[1]):
+				result = sm.OLS(eqtl_expr, sm.add_constant(eqtl_geno[:,geno_iter])).fit()
+				marginal_eqtl_coefs.append(result.params[1])
+			marginal_eqtl_coefs = np.asarray(marginal_eqtl_coefs)
+			#genotype_ld_scores.append(np.ones(len(marginal_eqtl_coefs)))
+			expr_ld_scores.append((np.square(marginal_eqtl_coefs)/.1) + (.9/(.1*(n_samples-1))))
+			n_standardized_genes = n_standardized_genes + 1
+			'''
+			# Ridge regression
+			clf = sklearn.linear_model.RidgeCV(alphas=[1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6]).fit(eqtl_geno, eqtl_expr)
+			clf = sklearn.linear_model.LassoCV(cv=5, random_state=0).fit(eqtl_geno, eqtl_expr)
+			eqtl_effects = clf.coef_
+
+			eqtl_effects_var = np.dot(np.dot(eqtl_effects, np.eye(len(eqtl_effects))), eqtl_effects)
+			if eqtl_effects_var > 0.0:
+				standardized_eqtl_effects = eqtl_effects/np.sqrt(eqtl_effects_var)
+				n_standardized_genes = n_standardized_genes + 1
+			else:
+				standardized_eqtl_effects = eqtl_effects
+
+			genotype_ld_scores.append(np.ones(len(standardized_eqtl_effects)))
+			expr_ld_scores.append(np.square(standardized_eqtl_effects))
+			'''
+	return np.hstack(genotype_ld_scores), np.hstack(expr_ld_scores), n_standardized_genes
+
+
 
 def compute_ld_scores_for_genotype_and_expression_with_no_ld_and_distribution_estimate_eqtl_effects(gene_sim_info_arr):
-    genotype_ld_scores = []
-    expr_ld_scores = []
-    n_genes = len(gene_sim_info_arr)
-    n_standardized_genes = 0
-    for gene_sim_info in gene_sim_info_arr:
-        if np.isnan(gene_sim_info[0][0]):
-            nvar = gene_sim_info[1]
-            genotype_ld_scores.append(np.ones(nvar))
-            expr_ld_scores.append(np.zeros(nvar))
-        else:
-            true_eqtl_effects = gene_sim_info[1]
-            eqtl_geno = gene_sim_info[2]
-            eqtl_expr = gene_sim_info[3]
+	genotype_ld_scores = []
+	expr_ld_scores = []
+	n_genes = len(gene_sim_info_arr)
+	n_standardized_genes = 0
+	for gene_sim_info in gene_sim_info_arr:
+		if np.isnan(gene_sim_info[0][0]):
+			nvar = gene_sim_info[1]
+			genotype_ld_scores.append(np.ones(nvar))
+			expr_ld_scores.append(np.zeros(nvar))
+		else:
+			true_eqtl_effects = gene_sim_info[1]
+			eqtl_geno = gene_sim_info[2]
+			eqtl_expr = gene_sim_info[3]
 
-            n_samples = len(eqtl_expr)
-            marginal_eqtl_coefs = []
-            for geno_iter in range(eqtl_geno.shape[1]):
-            	result = sm.OLS(eqtl_expr, sm.add_constant(eqtl_geno[:,geno_iter])).fit()
-            	marginal_eqtl_coefs.append(result.params[1])
-            marginal_eqtl_coefs = np.asarray(marginal_eqtl_coefs)
-            genotype_ld_scores.append(np.ones(len(marginal_eqtl_coefs)))
-            expr_ld_scores.append((np.square(marginal_eqtl_coefs)/.1) + (.9/(.1*(n_samples-1))))
-            n_standardized_genes = n_standardized_genes + 1
-            '''
-            # Ridge regression
-            clf = sklearn.linear_model.RidgeCV(alphas=[1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6]).fit(eqtl_geno, eqtl_expr)
-            clf = sklearn.linear_model.LassoCV(cv=5, random_state=0).fit(eqtl_geno, eqtl_expr)
-            eqtl_effects = clf.coef_
+			n_samples = len(eqtl_expr)
+			marginal_eqtl_coefs = []
+			for geno_iter in range(eqtl_geno.shape[1]):
+				result = sm.OLS(eqtl_expr, sm.add_constant(eqtl_geno[:,geno_iter])).fit()
+				marginal_eqtl_coefs.append(result.params[1])
+			marginal_eqtl_coefs = np.asarray(marginal_eqtl_coefs)
+			genotype_ld_scores.append(np.ones(len(marginal_eqtl_coefs)))
+			expr_ld_scores.append((np.square(marginal_eqtl_coefs)/.1) + (.9/(.1*(n_samples-1))))
+			n_standardized_genes = n_standardized_genes + 1
+			'''
+			# Ridge regression
+			clf = sklearn.linear_model.RidgeCV(alphas=[1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6]).fit(eqtl_geno, eqtl_expr)
+			clf = sklearn.linear_model.LassoCV(cv=5, random_state=0).fit(eqtl_geno, eqtl_expr)
+			eqtl_effects = clf.coef_
 
-            eqtl_effects_var = np.dot(np.dot(eqtl_effects, np.eye(len(eqtl_effects))), eqtl_effects)
-            if eqtl_effects_var > 0.0:
-                standardized_eqtl_effects = eqtl_effects/np.sqrt(eqtl_effects_var)
-                n_standardized_genes = n_standardized_genes + 1
-            else:
-                standardized_eqtl_effects = eqtl_effects
+			eqtl_effects_var = np.dot(np.dot(eqtl_effects, np.eye(len(eqtl_effects))), eqtl_effects)
+			if eqtl_effects_var > 0.0:
+				standardized_eqtl_effects = eqtl_effects/np.sqrt(eqtl_effects_var)
+				n_standardized_genes = n_standardized_genes + 1
+			else:
+				standardized_eqtl_effects = eqtl_effects
 
-            genotype_ld_scores.append(np.ones(len(standardized_eqtl_effects)))
-            expr_ld_scores.append(np.square(standardized_eqtl_effects))
-            '''
-    return np.hstack(genotype_ld_scores), np.hstack(expr_ld_scores), n_standardized_genes
+			genotype_ld_scores.append(np.ones(len(standardized_eqtl_effects)))
+			expr_ld_scores.append(np.square(standardized_eqtl_effects))
+			'''
+	return np.hstack(genotype_ld_scores), np.hstack(expr_ld_scores), n_standardized_genes
 
 
 
@@ -298,11 +350,16 @@ def h2_estimation_using_standard_approach_with_point_estimated_eqtl_effects(gene
 
 
 def h2_estimation_using_standard_approach_with_distribution_estimated_eqtl_effects(gene_sim_info_arr, gwas_z_scores, N_gwas_samples, N_gene_blocks, N_null_gene_blocks):
-	geno_ld_scores, expr_ld_scores, n_genes = compute_ld_scores_for_genotype_and_expression_with_no_ld_and_distribution_estimate_eqtl_effects(gene_sim_info_arr)
-	joint_ld_scores = np.hstack([geno_ld_scores.reshape(len(geno_ld_scores), 1), expr_ld_scores.reshape(len(expr_ld_scores), 1)])
+	#geno_ld_scores, expr_ld_scores, n_genes = compute_ld_scores_for_genotype_and_expression_with_no_ld_and_distribution_estimate_eqtl_effects(gene_sim_info_arr)
+	geno_ld_scores, expr_ld_scores, n_genes = compute_ld_scores_for_genotype_and_expression_with_ld_and_distribution_estimate_eqtl_effects(gene_sim_info_arr)
+	joint_ld_scores = np.hstack([np.ones((len(geno_ld_scores),1)),geno_ld_scores.reshape(len(geno_ld_scores), 1), expr_ld_scores.reshape(len(expr_ld_scores), 1)])
+
+
+	joint_ld_scores2 = np.hstack([np.ones((len(geno_ld_scores),1)),geno_ld_scores.reshape(len(geno_ld_scores), 1)])
+
 	result = sm.OLS(np.square(gwas_z_scores), joint_ld_scores).fit()
-	est_h2_g = (result.params[0] - 1.0)*len(gwas_z_scores)/N_gwas_samples
-	est_h2_e = result.params[1]*(n_genes)/N_gwas_samples
+	est_h2_g = (result.params[1])*len(gwas_z_scores)/N_gwas_samples
+	est_h2_e = result.params[2]*(n_genes)/N_gwas_samples
 	return est_h2_g, est_h2_e
 
 
@@ -340,7 +397,23 @@ t.write('method_name\ttrue_h2_g\ttrue_h2_e\test_h2_g\test_h2_e\tsimulation_iter\
 for itera in range(N_simulations):
 
 	# Simulate genome-wide data
+	'''
 	gene_sim_info_arr, gwas_z_scores, variance_of_Y = simulate_gwas_data_with_genotype_and_expression_effects_v3(N_expr_samples, N_gwas_samples, N_gene_blocks, N_null_gene_blocks, N_no_gene_blocks, N_var_per_block, h2_expr, h2_e_trait, h2_g_trait, num_causal_eqtl_var_per_block, fraction_causal_var_gwas)
+	handle = open('gene_sim_info.pickle','wb')
+	pickle.dump(gene_sim_info_arr, handle, protocol=pickle.HIGHEST_PROTOCOL)
+	handle.close()
+	handle = open('gwas_z.pickle','wb')
+	pickle.dump(gwas_z_scores, handle, protocol=pickle.HIGHEST_PROTOCOL)
+	handle.close()
+	'''
+
+	handle = open('gene_sim_info.pickle','rb')
+	gene_sim_info_arr = pickle.load(handle)
+	handle.close()
+
+	handle = open('gwas_z.pickle','rb')
+	gwas_z_scores = pickle.load(handle)
+	handle.close()
 
 
 	# h2 estimation using distribution-estimated eqtl effects
